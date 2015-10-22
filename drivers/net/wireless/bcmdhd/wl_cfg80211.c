@@ -9905,6 +9905,64 @@ static s32 wl_notify_escan_complete(struct bcm_cfg80211 *cfg,
 	return err;
 }
 
+#ifdef ESCAN_BUF_OVERFLOW_MGMT
+static void
+wl_cfg80211_find_removal_candidate(wl_bss_info_t *bss, removal_element_t *candidate)
+{
+	int idx;
+	for (idx = 0; idx < BUF_OVERFLOW_MGMT_COUNT; idx++) {
+		int len = BUF_OVERFLOW_MGMT_COUNT - idx - 1;
+		if (bss->RSSI < candidate[idx].RSSI) {
+			if (len)
+				memcpy(&candidate[idx + 1], &candidate[idx],
+					sizeof(removal_element_t) * len);
+			candidate[idx].RSSI = bss->RSSI;
+			candidate[idx].length = bss->length;
+			memcpy(&candidate[idx].BSSID, &bss->BSSID, ETHER_ADDR_LEN);
+			return;
+		}
+	}
+}
+
+static void
+wl_cfg80211_remove_lowRSSI_info(wl_scan_results_t *list, removal_element_t *candidate,
+	wl_bss_info_t *bi)
+{
+	int idx1, idx2;
+	int total_delete_len = 0;
+	for (idx1 = 0; idx1 < BUF_OVERFLOW_MGMT_COUNT; idx1++) {
+		int cur_len = WL_SCAN_RESULTS_FIXED_SIZE;
+		wl_bss_info_t *bss = NULL;
+		if (candidate[idx1].RSSI >= bi->RSSI)
+			continue;
+		for (idx2 = 0; idx2 < list->count; idx2++) {
+			bss = bss ? (wl_bss_info_t *)((uintptr)bss + dtoh32(bss->length)) :
+				list->bss_info;
+			if (!bcmp(&candidate[idx1].BSSID, &bss->BSSID, ETHER_ADDR_LEN) &&
+				candidate[idx1].RSSI == bss->RSSI &&
+				candidate[idx1].length == dtoh32(bss->length)) {
+				u32 delete_len = dtoh32(bss->length);
+				WL_DBG(("delete scan info of " MACDBG " to add new AP\n",
+					MAC2STRDBG(bss->BSSID.octet)));
+				if (idx2 < list->count -1) {
+					memmove((u8 *)bss, (u8 *)bss + delete_len,
+						list->buflen - cur_len - delete_len);
+				}
+				list->buflen -= delete_len;
+				list->count--;
+				total_delete_len += delete_len;
+				/* if delete_len is greater than or equal to result length */
+				if (total_delete_len >= bi->length) {
+					return;
+				}
+				break;
+			}
+			cur_len += dtoh32(bss->length);
+		}
+	}
+}
+#endif /* ESCAN_BUF_OVERFLOW_MGMT */
+
 static s32 wl_escan_handler(struct bcm_cfg80211 *cfg, bcm_struct_cfgdev *cfgdev,
 	const wl_event_msg_t *e, void *data)
 {
@@ -9996,6 +10054,12 @@ static s32 wl_escan_handler(struct bcm_cfg80211 *cfg, bcm_struct_cfgdev *cfgdev,
 
 		} else {
 			int cur_len = WL_SCAN_RESULTS_FIXED_SIZE;
+#ifdef ESCAN_BUF_OVERFLOW_MGMT
+			removal_element_t candidate[BUF_OVERFLOW_MGMT_COUNT];
+			int remove_lower_rssi = FALSE;
+
+			bzero(candidate, sizeof(removal_element_t)*BUF_OVERFLOW_MGMT_COUNT);
+#endif /* ESCAN_BUF_OVERFLOW_MGMT */
 			list = wl_escan_get_buf(cfg, FALSE);
 			if (scan_req_match(cfg)) {
 #ifdef WL_HOST_BAND_MGMT
@@ -10027,9 +10091,21 @@ static s32 wl_escan_handler(struct bcm_cfg80211 *cfg, bcm_struct_cfgdev *cfgdev,
 				}
 #endif /* WL_HOST_BAND_MGMT */
 			}
+#ifdef ESCAN_BUF_OVERFLOW_MGMT
+			if (bi_length > ESCAN_BUF_SIZE - list->buflen)
+				remove_lower_rssi = TRUE;
+#endif /* ESCAN_BUF_OVERFLOW_MGMT */
 			for (i = 0; i < list->count; i++) {
 				bss = bss ? (wl_bss_info_t *)((uintptr)bss + dtoh32(bss->length))
 					: list->bss_info;
+#ifdef ESCAN_BUF_OVERFLOW_MGMT
+				WL_TRACE(("%s("MACDBG"), i=%d bss: RSSI %d list->count %d\n",
+					bss->SSID, MAC2STRDBG(bss->BSSID.octet),
+					i, bss->RSSI, list->count));
+
+				if (remove_lower_rssi)
+					wl_cfg80211_find_removal_candidate(bss, candidate);
+#endif /* ESCAN_BUF_OVERFLOW_MGMT */
 
 				if (!bcmp(&bi->BSSID, &bss->BSSID, ETHER_ADDR_LEN) &&
 					(CHSPEC_BAND(wl_chspec_driver_to_host(bi->chanspec))
@@ -10108,8 +10184,17 @@ static s32 wl_escan_handler(struct bcm_cfg80211 *cfg, bcm_struct_cfgdev *cfgdev,
 				cur_len += dtoh32(bss->length);
 			}
 			if (bi_length > ESCAN_BUF_SIZE - list->buflen) {
+#ifdef ESCAN_BUF_OVERFLOW_MGMT
+				wl_cfg80211_remove_lowRSSI_info(list, candidate, bi);
+				if (bi_length > ESCAN_BUF_SIZE - list->buflen) {
+					WL_DBG(("RSSI(" MACDBG ") is too low(%d) to add Buffer\n",
+						MAC2STRDBG(bi->BSSID.octet), bi->RSSI));
+					goto exit;
+				}
+#else
 				WL_ERR(("Buffer is too small: ignoring\n"));
 				goto exit;
+#endif /* ESCAN_BUF_OVERFLOW_MGMT */
 			}
 
 			memcpy(&(((char *)list)[list->buflen]), bi, bi_length);
