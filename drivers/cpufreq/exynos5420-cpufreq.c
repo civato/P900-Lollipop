@@ -465,7 +465,7 @@ static const unsigned int asv_voltage_5420_CA15[CPUFREQ_LEVEL_END_CA15] = {
 	1200000,	/* L7  1700 */
 	1200000,	/* L8  1600 */
 	1100000,	/* L9  1500 */
-	1100000,	/* L10  1400 */
+	1100000,	/* L10 1400 */
 	1100000,	/* L11 1300 */
 	1000000,	/* L12 1200 */
 	1000000,	/* L13 1100 */
@@ -476,7 +476,7 @@ static const unsigned int asv_voltage_5420_CA15[CPUFREQ_LEVEL_END_CA15] = {
 	 900000,	/* L18  600 */
 	 900000,	/* L19  500 */
 	 900000,	/* L20  400 */
-	 900000,	/* L22  300 */
+	 900000,	/* L21  300 */
 	 900000,	/* L22  200 */
 };
 
@@ -488,17 +488,10 @@ static const unsigned int asv_voltage_5420_CA15[CPUFREQ_LEVEL_END_CA15] = {
  */
 static const unsigned int exynos5420_max_op_freq_b_evt0[NR_CPUS + 1] = {
 	UINT_MAX,
-#ifdef CONFIG_EXYNOS5_MAX_CPU_HOTPLUG
 	2100000,
 	2100000,
 	2100000,
 	2100000,
-#else
-	1900000,
-	1900000,
-	1900000,
-	1900000,
-#endif
 };
 
 /* Minimum memory throughput in megabytes per second */
@@ -515,16 +508,16 @@ static int exynos5420_bus_table_CA7[CPUFREQ_LEVEL_END_CA7] = {
 	160000,	/* 700 MHz */
 	133000,	/* 600 MHz */
 	133000,	/* 500 MHz */
-	0,	/* 400 MHz */
-	0,	/* 300 MHz */
-	0,	/* 200 MHz */
+	133000,	/* 400 MHz */
+	133000,	/* 300 MHz */
+	133000,	/* 200 MHz */
 };
 
 static int exynos5420_bus_table_CA15[CPUFREQ_LEVEL_END_CA15] = {
-	800000,	/* 2.4 GHz */
-	800000,	/* 2.3 GHz */
-	800000,	/* 2.2 GHz */
-	800000,	/* 2.1 GHz */
+	933000,	/* 2.4 GHz */
+	933000,	/* 2.3 GHz */
+	933000,	/* 2.2 GHz */
+	933000,	/* 2.1 GHz */
 	800000,	/* 2.0 GHz */
 	733000,	/* 1.9 GHz */
 	733000,	/* 1.8 GHz */
@@ -894,10 +887,7 @@ static void __init set_volt_table_CA7(void)
 	exynos5420_freq_table_CA7[L2].frequency = CPUFREQ_ENTRY_INVALID;
 	max_support_idx_CA7 = L3;
 
-	min_support_idx_CA7 = L11;
-	exynos5420_freq_table_CA7[L12].frequency = CPUFREQ_ENTRY_INVALID;
-	exynos5420_freq_table_CA7[L13].frequency = CPUFREQ_ENTRY_INVALID;
-	exynos5420_freq_table_CA7[L14].frequency = CPUFREQ_ENTRY_INVALID;
+	min_support_idx_CA7 = L14;
 }
 
 static void __init set_volt_table_CA15(void)
@@ -918,16 +908,10 @@ static void __init set_volt_table_CA15(void)
 				exynos5420_volt_table_CA15[i]);
 	}
 
+	max_support_idx_CA15 = L3;
 	exynos5420_freq_table_CA15[L0].frequency = CPUFREQ_ENTRY_INVALID;
 	exynos5420_freq_table_CA15[L1].frequency = CPUFREQ_ENTRY_INVALID;
 	exynos5420_freq_table_CA15[L2].frequency = CPUFREQ_ENTRY_INVALID;
-#ifdef CONFIG_EXYNOS5_MAX_CPU_HOTPLUG
-	max_support_idx_CA15 = L3;
-#else
-	exynos5420_freq_table_CA15[L3].frequency = CPUFREQ_ENTRY_INVALID;
-	exynos5420_freq_table_CA15[L4].frequency = CPUFREQ_ENTRY_INVALID;
-	max_support_idx_CA15 = L5;
-#endif
 
 	min_support_idx_CA15 = L16;
 	exynos5420_freq_table_CA15[L17].frequency = CPUFREQ_ENTRY_INVALID;

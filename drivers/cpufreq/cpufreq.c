@@ -45,6 +45,8 @@ static DEFINE_PER_CPU(struct cpufreq_policy *, cpufreq_cpu_data);
 #ifdef CONFIG_HOTPLUG_CPU
 /* This one keeps track of the previously set governor of a removed CPU */
 static DEFINE_PER_CPU(char[CPUFREQ_NAME_LEN], cpufreq_cpu_governor);
+static int last_min = -1;
+static int last_max = -1;
 #endif
 static DEFINE_SPINLOCK(cpufreq_driver_lock);
 
@@ -69,6 +71,27 @@ static DEFINE_SPINLOCK(cpufreq_driver_lock);
  */
 static DEFINE_PER_CPU(int, cpufreq_policy_cpu);
 static DEFINE_PER_CPU(struct rw_semaphore, cpu_policy_rwsem);
+
+static unsigned int gpu_min = 100;
+static unsigned int gpu_max = 667;
+extern unsigned int get_cur_gpu_freq(void);
+extern ssize_t hlpr_get_gpu_gov_table(char *buf);
+extern void hlpr_set_gpu_gov_table(int gpu_table[]);
+extern ssize_t hlpr_get_gpu_volt_table(char *buf);
+extern void hlpr_set_gpu_volt_table(int gpu_table[]);
+extern ssize_t hlpr_get_gpu_gov_mif_table(char *buf);
+extern void hlpr_set_gpu_gov_mif_table(int gpu_table[]);
+extern ssize_t hlpr_get_gpu_gov_int_table(char *buf);
+extern void hlpr_set_gpu_gov_int_table(int gpu_table[]);
+extern ssize_t hlpr_get_gpu_gov_cpu_table(char *buf);
+extern void hlpr_set_gpu_gov_cpu_table(int gpu_table[]);
+#ifdef CONFIG_EXYNOS5_DYNAMIC_CPU_HOTPLUG
+static unsigned int hotplug_enabled_flag = 1;
+static unsigned int hotplug_cpu_up_load_value = 0;
+static unsigned int hotplug_cpu_up_boost_value = 0;
+static unsigned int normalmin_freq_value = 250000;
+static unsigned int hotplug_cpu_down_hysteresis_value = 20;
+#endif
 
 #define lock_policy_rwsem(mode, cpu)					\
 static int lock_policy_rwsem_##mode					\
@@ -374,7 +397,18 @@ show_one(cpuinfo_max_freq, cpuinfo.max_freq);
 show_one(cpuinfo_transition_latency, cpuinfo.transition_latency);
 show_one(scaling_min_freq, min);
 show_one(scaling_max_freq, max);
-show_one(scaling_cur_freq, cur);
+
+static ssize_t show_scaling_cur_freq(
+	struct cpufreq_policy *policy, char *buf)
+{
+	ssize_t ret;
+
+	if (cpufreq_driver && cpufreq_driver->setpolicy && cpufreq_driver->get)
+		ret = sprintf(buf, "%u\n", cpufreq_driver->get(policy->cpu));
+	else
+		ret = sprintf(buf, "%u\n", policy->cur);
+	return ret;
+}
 
 static int __cpufreq_set_policy(struct cpufreq_policy *data,
 				struct cpufreq_policy *policy);
@@ -418,6 +452,204 @@ static ssize_t show_cpuinfo_cur_freq(struct cpufreq_policy *policy,
 	return sprintf(buf, "%u\n", cur_freq);
 }
 
+extern void hlpr_set_min_max_G3D(unsigned int min, unsigned int max);
+
+static ssize_t show_scaling_min_freq_gpu(struct cpufreq_policy *policy,	char *buf)
+{
+	return sprintf(buf, "%u\n", gpu_min);
+}
+
+static ssize_t store_scaling_min_freq_gpu(struct cpufreq_policy *policy, const char *buf, size_t count)
+{
+	unsigned int ret = -EINVAL;
+	unsigned int value = 0;
+
+	ret = sscanf(buf, "%u", &value);
+	if (ret != 1)
+		return -EINVAL;
+	
+	if (value < gpu_max)
+	{
+		gpu_min = value;
+		hlpr_set_min_max_G3D(gpu_min, gpu_max);
+	}
+	else
+		return -EINVAL;
+	return count;
+}
+
+static ssize_t show_scaling_max_freq_gpu(struct cpufreq_policy *policy,	char *buf)
+{
+	return sprintf(buf, "%u\n", gpu_max);
+}
+
+static ssize_t store_scaling_max_freq_gpu(struct cpufreq_policy *policy, const char *buf, size_t count)
+{
+	unsigned int ret = -EINVAL;
+	unsigned int value = 0;
+
+	ret = sscanf(buf, "%u", &value);
+	if (ret != 1)
+		return -EINVAL;
+
+	if (value > gpu_min)
+	{
+		gpu_max = value;
+		hlpr_set_min_max_G3D(gpu_min, gpu_max);
+	}
+	else
+		return -EINVAL;
+	return count;
+}
+
+#ifdef CONFIG_EXYNOS5_DYNAMIC_CPU_HOTPLUG
+/* hotplug sysfs interface */
+
+unsigned int get_hotplug_enabled(void)
+{
+	return hotplug_enabled_flag;
+}
+
+void set_hotplug_enabled(unsigned int state)
+{
+	if (state == 0 || state == 1)
+		hotplug_enabled_flag = state;
+}
+
+unsigned int get_hotplug_cpu_up_load(void)
+{
+	return hotplug_cpu_up_load_value;
+}
+
+unsigned int get_hotplug_cpu_up_boost(void)
+{
+	return hotplug_cpu_up_boost_value;
+}
+
+unsigned int get_normalmin_freq(void)
+{
+	return normalmin_freq_value;
+}
+
+static ssize_t show_hotplug_cpu_down_hysteresis(struct cpufreq_policy *policy, char *buf)
+{
+ return sprintf(buf, "%u\n", hotplug_cpu_down_hysteresis_value);
+}
+
+static ssize_t store_hotplug_cpu_down_hysteresis(struct cpufreq_policy *policy, const char *buf, size_t count)
+{
+	unsigned int ret = -EINVAL;
+	unsigned int value = 0;
+	
+	ret = sscanf(buf, "%u", &value);
+	if (ret != 1)
+	return -EINVAL;
+	
+	if (value >= 0 && value <= 100)
+		hotplug_cpu_down_hysteresis_value = value;
+	else
+		return
+			-EINVAL;
+		
+	return count;
+}
+
+unsigned int get_hotplug_cpu_down_hysteresis(void) {
+	return hotplug_cpu_down_hysteresis_value;
+}
+
+static ssize_t show_hotplug_enabled(struct cpufreq_policy *policy, char *buf)
+{
+ return sprintf(buf, "%u\n", hotplug_enabled_flag);
+}
+
+static ssize_t store_hotplug_enabled(struct cpufreq_policy *policy, const char *buf, size_t count)
+{
+ unsigned int ret = -EINVAL;
+ unsigned int value = 0;
+
+ ret = sscanf(buf, "%u", &value);
+ if (ret != 1)
+ return -EINVAL;
+
+if (value == 0 || value == 1)
+	hotplug_enabled_flag = value;
+else
+	return
+		-EINVAL;
+		
+ return count;
+}
+
+static ssize_t show_hotplug_cpu_up_load(struct cpufreq_policy *policy, char *buf)
+{
+ return sprintf(buf, "%u\n", hotplug_cpu_up_load_value);
+}
+
+static ssize_t store_hotplug_cpu_up_load(struct cpufreq_policy *policy, const char *buf, size_t count)
+{
+ unsigned int ret = -EINVAL;
+ unsigned int value = 0;
+
+ ret = sscanf(buf, "%u", &value);
+ if (ret != 1)
+ return -EINVAL;
+
+if (value >= 0 && value <= 101)
+	hotplug_cpu_up_load_value = value;
+else
+	return
+		-EINVAL;
+		
+ return count;
+}
+
+static ssize_t show_hotplug_cpu_up_boost(struct cpufreq_policy *policy, char *buf)
+{
+ return sprintf(buf, "%u\n", hotplug_cpu_up_boost_value);
+}
+
+static ssize_t store_hotplug_cpu_up_boost(struct cpufreq_policy *policy, const char *buf, size_t count)
+{
+ unsigned int ret = -EINVAL;
+ unsigned int value = 0;
+
+ ret = sscanf(buf, "%u", &value);
+ if (ret != 1)
+ return -EINVAL;
+
+if (value >= 0 && value <= 101)
+	hotplug_cpu_up_boost_value = value;
+else
+	return
+		-EINVAL;
+		
+ return count;
+}
+
+static ssize_t show_normalmin_freq(struct cpufreq_policy *policy, char *buf)
+{
+ return sprintf(buf, "%u\n", normalmin_freq_value);
+}
+
+static ssize_t store_normalmin_freq(struct cpufreq_policy *policy, const char *buf, size_t count)
+{
+ unsigned int ret = -EINVAL;
+ unsigned int value = 0;
+
+ ret = sscanf(buf, "%u", &value);
+ if (ret != 1)
+ return -EINVAL;
+
+if (value >= 100000 && value <= 2100000)
+	normalmin_freq_value = value;
+else
+	return
+		-EINVAL;
+		
+ return count;
+}
+#endif
 
 /**
  * show_scaling_governor - show the current policy for the specified CPU
@@ -579,6 +811,86 @@ static ssize_t show_bios_limit(struct cpufreq_policy *policy, char *buf)
 	return sprintf(buf, "%u\n", policy->cpuinfo.max_freq);
 }
 
+ssize_t show_GPU_gov_table(struct cpufreq_policy *policy, char *buf)
+{
+	return hlpr_get_gpu_gov_table(buf);
+}
+
+ssize_t store_GPU_gov_table(struct cpufreq_policy *policy, const char *buf, size_t count)
+{
+	unsigned int ret = -EINVAL;
+	int u[FREQ_STEPS_GPU];
+	ret = sscanf(buf, "%d %d %d %d %d %d %d %d %d %d", &u[0], &u[1], &u[2], &u[3], &u[4], &u[5], &u[6], &u[7], &u[8], &u[9]);
+
+	hlpr_set_gpu_gov_table(u);
+	return count;
+}
+
+ssize_t show_GPU_volt_table(struct cpufreq_policy *policy, char *buf)
+{
+        return hlpr_get_gpu_volt_table(buf);
+}
+
+ssize_t store_GPU_volt_table(struct cpufreq_policy *policy, const char *buf, size_t count)
+{
+        unsigned int ret = -EINVAL;
+        int u[FREQ_STEPS_GPU];
+        ret = sscanf(buf, "%d %d %d %d %d %d %d %d %d %d", &u[0], &u[1], &u[2], &u[3], &u[4], &u[5], &u[6], &u[7], &u[8], &u[9]);
+
+        hlpr_set_gpu_volt_table(u);
+        return count;
+}
+
+ssize_t show_GPU_gov_mif_table(struct cpufreq_policy *policy, char *buf)
+{
+	return hlpr_get_gpu_gov_mif_table(buf);
+}
+
+ssize_t store_GPU_gov_mif_table(struct cpufreq_policy *policy, const char *buf, size_t count)
+{
+	unsigned int ret = -EINVAL;
+	int u[FREQ_STEPS_GPU];
+	ret = sscanf(buf, "%d %d %d %d %d %d %d %d %d %d", &u[0], &u[1], &u[2], &u[3], &u[4], &u[5], &u[6], &u[7], &u[8], &u[9]);
+
+	hlpr_set_gpu_gov_mif_table(u);
+	return count;
+}
+
+ssize_t show_GPU_gov_int_table(struct cpufreq_policy *policy, char *buf)
+{
+        return hlpr_get_gpu_gov_int_table(buf);
+}
+
+ssize_t store_GPU_gov_int_table(struct cpufreq_policy *policy, const char *buf, size_t count)
+{
+        unsigned int ret = -EINVAL;
+        int u[FREQ_STEPS_GPU];
+        ret = sscanf(buf, "%d %d %d %d %d %d %d %d %d %d", &u[0], &u[1], &u[2], &u[3], &u[4], &u[5], &u[6], &u[7], &u[8], &u[9]);
+
+        hlpr_set_gpu_gov_int_table(u);
+        return count;
+}
+
+ssize_t show_GPU_gov_cpu_table(struct cpufreq_policy *policy, char *buf)
+{
+        return hlpr_get_gpu_gov_cpu_table(buf);
+}
+
+ssize_t store_GPU_gov_cpu_table(struct cpufreq_policy *policy, const char *buf, size_t count)
+{
+        unsigned int ret = -EINVAL;
+        int u[FREQ_STEPS_GPU];
+        ret = sscanf(buf, "%d %d %d %d %d %d %d %d %d %d", &u[0], &u[1], &u[2], &u[3], &u[4], &u[5], &u[6], &u[7], &u[8], &u[9]);
+
+        hlpr_set_gpu_gov_cpu_table(u);
+        return count;
+}
+
+ssize_t show_scaling_cur_freq_gpu(struct cpufreq_policy *policy, char *buf)
+{
+	return sprintf(buf, "%u\n", get_cur_gpu_freq());
+}
+
 cpufreq_freq_attr_ro_perm(cpuinfo_cur_freq, 0400);
 cpufreq_freq_attr_ro(cpuinfo_min_freq);
 cpufreq_freq_attr_ro(cpuinfo_max_freq);
@@ -593,6 +905,23 @@ cpufreq_freq_attr_rw(scaling_min_freq);
 cpufreq_freq_attr_rw(scaling_max_freq);
 cpufreq_freq_attr_rw(scaling_governor);
 cpufreq_freq_attr_rw(scaling_setspeed);
+cpufreq_freq_attr_rw(UV_mV_table);
+cpufreq_freq_attr_rw(UV_uV_table);
+cpufreq_freq_attr_rw(scaling_min_freq_gpu);
+cpufreq_freq_attr_rw(scaling_max_freq_gpu);
+cpufreq_freq_attr_ro(scaling_cur_freq_gpu);
+cpufreq_freq_attr_rw(GPU_gov_table);
+cpufreq_freq_attr_rw(GPU_volt_table);
+cpufreq_freq_attr_rw(GPU_gov_mif_table);
+cpufreq_freq_attr_rw(GPU_gov_int_table);
+cpufreq_freq_attr_rw(GPU_gov_cpu_table);
+#ifdef CONFIG_EXYNOS5_DYNAMIC_CPU_HOTPLUG
+cpufreq_freq_attr_rw(hotplug_enabled);
+cpufreq_freq_attr_rw(hotplug_cpu_up_load);
+cpufreq_freq_attr_rw(hotplug_cpu_up_boost);
+cpufreq_freq_attr_rw(normalmin_freq);
+cpufreq_freq_attr_rw(hotplug_cpu_down_hysteresis);
+#endif
 
 static struct attribute *default_attrs[] = {
 	&cpuinfo_min_freq.attr,
@@ -604,8 +933,26 @@ static struct attribute *default_attrs[] = {
 	&related_cpus.attr,
 	&scaling_governor.attr,
 	&scaling_driver.attr,
+	&cpufreq_freq_attr_scaling_available_freqs.attr,
 	&scaling_available_governors.attr,
 	&scaling_setspeed.attr,
+	&UV_mV_table.attr,
+	&UV_uV_table.attr,
+	&scaling_min_freq_gpu.attr,
+	&scaling_max_freq_gpu.attr,
+	&scaling_cur_freq_gpu.attr,
+	&GPU_gov_table.attr,
+	&GPU_volt_table.attr,
+	&GPU_gov_mif_table.attr,
+	&GPU_gov_int_table.attr,
+	&GPU_gov_cpu_table.attr,
+#ifdef CONFIG_EXYNOS5_DYNAMIC_CPU_HOTPLUG
+	&hotplug_enabled.attr,
+	&hotplug_cpu_up_load.attr,
+	&hotplug_cpu_up_boost.attr,
+	&normalmin_freq.attr,
+	&hotplug_cpu_down_hysteresis.attr,
+#endif
 	NULL
 };
 
@@ -821,11 +1168,11 @@ static int cpufreq_add_dev_interface(unsigned int cpu,
 		if (ret)
 			goto err_out_kobj_put;
 	}
-	if (cpufreq_driver->target) {
-		ret = sysfs_create_file(&policy->kobj, &scaling_cur_freq.attr);
-		if (ret)
-			goto err_out_kobj_put;
-	}
+
+	ret = sysfs_create_file(&policy->kobj, &scaling_cur_freq.attr);
+	if (ret)
+		goto err_out_kobj_put;
+
 	if (cpufreq_driver->bios_limit) {
 		ret = sysfs_create_file(&policy->kobj, &bios_limit.attr);
 		if (ret)
@@ -952,6 +1299,13 @@ static int cpufreq_add_dev(struct device *dev, struct subsys_interface *sif)
 		pr_debug("initialization failed\n");
 		goto err_unlock_policy;
 	}
+
+	if (last_min > -1)
+		policy->min = last_min;
+
+	if (last_max > -1)
+		policy->max = last_max;
+
 	policy->user_policy.min = policy->min;
 	policy->user_policy.max = policy->max;
 
@@ -1102,6 +1456,8 @@ static int __cpufreq_remove_dev(struct device *dev, struct subsys_interface *sif
 	if (cpufreq_driver->target)
 		__cpufreq_governor(data, CPUFREQ_GOV_STOP);
 
+	last_min = data->min;
+	last_max = data->max;
 	kobj = &data->kobj;
 	cmp = &data->kobj_unregister;
 	unlock_policy_rwsem_write(cpu);

@@ -15,7 +15,9 @@
 #include <linux/clk.h>
 #include <linux/clk.h>
 #include <linux/list.h>
+#include <linux/rculist.h>
 #include <linux/device.h>
+#include <linux/sysfs_helpers.h>
 #include <linux/devfreq.h>
 #include <linux/platform_device.h>
 #include <linux/regulator/consumer.h>
@@ -24,6 +26,7 @@
 #include <linux/reboot.h>
 #include <linux/kobject.h>
 #include <linux/delay.h>
+#include <linux/errno.h>
 
 #include <mach/regs-clock.h>
 #include <mach/regs-pmu.h>
@@ -41,7 +44,7 @@
 
 #define SET_DREX_TIMING
 
-#define MIF_VOLT_STEP		12500
+#define MIF_VOLT_STEP		6250
 #define COLD_VOLT_OFFSET	37500
 #define LIMIT_COLD_VOLTAGE	1250000
 #define MIN_COLD_VOLTAGE	950000
@@ -118,9 +121,8 @@ enum mif_bus_idx {
 	LV_5,
 	LV_6,
 	LV_7,
-#if !defined(CONFIG_SUPPORT_WQXGA)
 	LV_8,
-#endif
+	LV_9,
 	LV_END,
 };
 
@@ -132,21 +134,21 @@ struct mif_bus_opp_table {
 };
 
 struct mif_bus_opp_table mif_bus_opp_list[] = {
-	{LV_0, 800000, 1050000, 0},
-	{LV_1, 733000, 1037500, 0},
-	{LV_2, 667000, 1012500, 0},
-	{LV_3, 533000,  937500, 0},
-	{LV_4, 400000,  887500, 0},
-	{LV_5, 266000,  875000, 0},
-	{LV_6, 200000,  875000, 0},
-	{LV_7, 160000,  875000, 0},
-#if !defined(CONFIG_SUPPORT_WQXGA)
-	{LV_8, 133000,  875000, 0},
-#endif
+	{LV_0, 933000, 1075000, 0},
+	{LV_1, 800000, 1050000, 0},
+	{LV_2, 733000, 1037500, 0},
+	{LV_3, 667000, 1012500, 0},
+	{LV_4, 533000,  937500, 0},
+	{LV_5, 400000,  887500, 0},
+	{LV_6, 266000,  875000, 0},
+	{LV_7, 200000,  875000, 0},
+	{LV_8, 160000,  875000, 0},
+	{LV_9, 133000,  875000, 0},
 };
 
 static unsigned int exynos5420_dram_param[][3] = {
 	/* timiningRow, timingData, timingPower */
+	{0x345A96D3, 0x3630065C, 0x545B0446},	/* 933Mhz */
 	{0x345A96D3, 0x3630065C, 0x50380336},	/* 800Mhz */
 	{0x30598651, 0x3630065C, 0x4C340336},	/* 733Mhz */
 	{0x2C4885D0, 0x3630065C, 0x442F0335},	/* 667Mhz */
@@ -260,7 +262,7 @@ void exynos5_update_media_layers(enum devfreq_media_type media_type, unsigned in
 
 #if !defined(CONFIG_SUPPORT_WQXGA)
 	if (!enabled_fimc_lite && num_mixer_layers) {
-		media_qos_freq = mif_bus_opp_list[LV_4].clk;
+		media_qos_freq = mif_bus_opp_list[LV_5].clk;
 		goto out;
 	}
 #endif
@@ -269,86 +271,86 @@ void exynos5_update_media_layers(enum devfreq_media_type media_type, unsigned in
 #if defined(CONFIG_SUPPORT_WQXGA)
 	case NUM_LAYERS_5:
 		if (enabled_fimc_lite)
-			media_qos_freq = mif_bus_opp_list[LV_0].clk;
-		else
 			media_qos_freq = mif_bus_opp_list[LV_1].clk;
+		else
+			media_qos_freq = mif_bus_opp_list[LV_2].clk;
 		break;
 	case NUM_LAYERS_4:
 		if (enabled_fimc_lite) {
 			if (num_fimd1_layers == NUM_LAYERS_3)
-				media_qos_freq = mif_bus_opp_list[LV_1].clk;
-			else
 				media_qos_freq = mif_bus_opp_list[LV_2].clk;
+			else
+				media_qos_freq = mif_bus_opp_list[LV_3].clk;
 		} else {
-			media_qos_freq = mif_bus_opp_list[LV_3].clk;
+			media_qos_freq = mif_bus_opp_list[LV_4].clk;
 		}
 		break;
 	case NUM_LAYERS_3:
 		if (enabled_fimc_lite) {
 			if (num_fimd1_layers == NUM_LAYERS_3)
-				media_qos_freq = mif_bus_opp_list[LV_2].clk;
-			else
-				media_qos_freq = mif_bus_opp_list[LV_3].clk;
-		} else {
-			if (num_fimd1_layers == NUM_LAYERS_3)
 				media_qos_freq = mif_bus_opp_list[LV_3].clk;
 			else
 				media_qos_freq = mif_bus_opp_list[LV_4].clk;
+		} else {
+			if (num_fimd1_layers == NUM_LAYERS_3)
+				media_qos_freq = mif_bus_opp_list[LV_4].clk;
+			else
+				media_qos_freq = mif_bus_opp_list[LV_5].clk;
 		}
 		break;
 	case NUM_LAYERS_2:
 		if (enabled_fimc_lite) {
-			media_qos_freq = mif_bus_opp_list[LV_3].clk;
+			media_qos_freq = mif_bus_opp_list[LV_4].clk;
 		} else {
 			if (num_fimd1_layers == NUM_LAYERS_2)
-				media_qos_freq = mif_bus_opp_list[LV_5].clk;
+				media_qos_freq = mif_bus_opp_list[LV_6].clk;
 			else
-				media_qos_freq = mif_bus_opp_list[LV_4].clk;
+				media_qos_freq = mif_bus_opp_list[LV_5].clk;
 		}
 		break;
 	case NUM_LAYERS_1:
 	case NUM_LAYERS_0:
 		if (enabled_fimc_lite)
-			media_qos_freq = mif_bus_opp_list[LV_3].clk;
+			media_qos_freq = mif_bus_opp_list[LV_4].clk;
 		else
-			media_qos_freq = mif_bus_opp_list[LV_7].clk;
+			media_qos_freq = mif_bus_opp_list[LV_8].clk;
 		break;
 #else
 	case NUM_LAYERS_6:
 		if (enabled_fimc_lite)
-			media_qos_freq = mif_bus_opp_list[LV_0].clk;
+			media_qos_freq = mif_bus_opp_list[LV_1].clk;
 		break;
 	case NUM_LAYERS_5:
 		if (enabled_fimc_lite)
-			media_qos_freq = mif_bus_opp_list[LV_2].clk;
+			media_qos_freq = mif_bus_opp_list[LV_3].clk;
 		break;
 	case NUM_LAYERS_4:
-		if (enabled_fimc_lite)
-			media_qos_freq = mif_bus_opp_list[LV_2].clk;
-		else
-			media_qos_freq = mif_bus_opp_list[LV_4].clk;
-		break;
-	case NUM_LAYERS_3:
 		if (enabled_fimc_lite)
 			media_qos_freq = mif_bus_opp_list[LV_3].clk;
 		else
 			media_qos_freq = mif_bus_opp_list[LV_5].clk;
 		break;
+	case NUM_LAYERS_3:
+		if (enabled_fimc_lite)
+			media_qos_freq = mif_bus_opp_list[LV_4].clk;
+		else
+			media_qos_freq = mif_bus_opp_list[LV_6].clk;
+		break;
 	case NUM_LAYERS_2:
 		if (enabled_fimc_lite)
-			media_qos_freq = mif_bus_opp_list[LV_3].clk;
+			media_qos_freq = mif_bus_opp_list[LV_4].clk;
 		else
-			media_qos_freq = mif_bus_opp_list[LV_7].clk;
+			media_qos_freq = mif_bus_opp_list[LV_8].clk;
 		break;
 	case NUM_LAYERS_1:
 	case NUM_LAYERS_0:
 		if (enabled_fimc_lite) {
 			if (num_mixer_layers == NUM_LAYERS_0 && num_fimd1_layers < NUM_LAYERS_2)
-				media_qos_freq = mif_bus_opp_list[LV_4].clk;
+				media_qos_freq = mif_bus_opp_list[LV_5].clk;
 			else
-				media_qos_freq = mif_bus_opp_list[LV_3].clk;
+				media_qos_freq = mif_bus_opp_list[LV_4].clk;
 		} else {
-			media_qos_freq = mif_bus_opp_list[LV_8].clk;
+			media_qos_freq = mif_bus_opp_list[LV_9].clk;
 		}
 		break;
 #endif
@@ -400,9 +402,9 @@ static void exynos5_set_spll_timing(void)
 {
 	unsigned int spll_timing_row, spll_timing_data, spll_timing_power;
 
-	spll_timing_row = exynos5420_dram_param[LV_4][0];
-	spll_timing_data = exynos5420_dram_param[LV_4][1];
-	spll_timing_power = exynos5420_dram_param[LV_4][2];
+	spll_timing_row = exynos5420_dram_param[LV_5][0];
+	spll_timing_data = exynos5420_dram_param[LV_5][1];
+	spll_timing_power = exynos5420_dram_param[LV_5][2];
 
 	/* set drex timing parameters for SPLL(400MHz) switching */
 	__raw_writel(spll_timing_row, EXYNOS5_DREXI_0_TIMINGROW1);
@@ -502,15 +504,15 @@ static void exynos5_mif_set_freq(struct busfreq_data_mif *data,
 		}
 	}
 
-	if (target_freq <= mif_bus_opp_list[LV_4].clk && !data->bp_enabled) {
+	if (target_freq <= mif_bus_opp_list[LV_5].clk && !data->bp_enabled) {
 		exynos5_back_pressure_enable(true);
 		data->bp_enabled = true;
 	}
 
 #if defined(CONFIG_SUPPORT_WQXGA)
-	tmp_clk = mif_bus_opp_list[LV_6].clk;
+	tmp_clk = mif_bus_opp_list[LV_7].clk;
 #else
-	tmp_clk = mif_bus_opp_list[LV_5].clk;
+	tmp_clk = mif_bus_opp_list[LV_6].clk;
 #endif
 
 	if (target_freq > tmp_clk && data->changed_timeout) {
@@ -556,9 +558,9 @@ static void exynos5_mif_set_freq(struct busfreq_data_mif *data,
 	clk_disable(data->fout_spll);
 
 #if defined(CONFIG_SUPPORT_WQXGA)
-	tmp_clk = mif_bus_opp_list[LV_6].clk;
+	tmp_clk = mif_bus_opp_list[LV_7].clk;
 #else
-	tmp_clk = mif_bus_opp_list[LV_5].clk;
+	tmp_clk = mif_bus_opp_list[LV_6].clk;
 #endif
 
 	if (target_freq <= tmp_clk && !data->changed_timeout) {
@@ -566,7 +568,7 @@ static void exynos5_mif_set_freq(struct busfreq_data_mif *data,
 		data->changed_timeout = true;
 	}
 
-	if (target_freq > mif_bus_opp_list[LV_4].clk && data->bp_enabled) {
+	if (target_freq > mif_bus_opp_list[LV_5].clk && data->bp_enabled) {
 		exynos5_back_pressure_enable(false);
 		data->bp_enabled = false;
 	}
@@ -712,7 +714,7 @@ static int exynos5_mif_bus_get_dev_status(struct device *dev,
 }
 
 static struct devfreq_dev_profile exynos5_mif_devfreq_profile = {
-	.initial_freq	= 800000,
+	.initial_freq	= 933000,
 	.polling_ms	= 100,
 	.target		= exynos5_mif_busfreq_target,
 	.get_dev_status	= exynos5_mif_bus_get_dev_status,
@@ -939,6 +941,66 @@ static ssize_t show_freq_table(struct device *dev, struct device_attribute *attr
 
 static DEVICE_ATTR(freq_table, S_IRUGO, show_freq_table, NULL);
 
+static ssize_t show_volt_table(struct device *device,
+		struct device_attribute *attr, char *buf)
+{	
+	struct device_opp *dev_opp = ERR_PTR(-ENODEV);
+	struct opp *temp_opp;
+	struct device *mif_dev = device->parent;
+	int len = 0;
+
+	dev_opp = find_device_opp(mif_dev);
+
+	list_for_each_entry_rcu(temp_opp, &dev_opp->opp_list, node) {
+		if (temp_opp->available)
+			len += sprintf(buf + len, "%lu %lu\n",
+					opp_get_freq(temp_opp),
+					opp_get_voltage(temp_opp));
+	}
+
+	return len;
+}
+
+static ssize_t store_volt_table(struct device *device,
+		struct device_attribute *attr,
+		const char *buf, size_t count)
+{
+        struct device *mif_dev = device->parent;
+	struct device_opp *dev_opp = find_device_opp(mif_dev);
+	struct opp *temp_opp;
+	int u[LV_END];
+	int rest, t, i = 0;
+
+	if ((t = read_into((int*)&u, LV_END, buf, count)) < 0)
+		return -EINVAL;
+
+	if (t == 2 && LV_END != 2) {
+		temp_opp = opp_find_freq_exact(mif_dev, u[0], true);
+		if(IS_ERR(temp_opp))
+			return -EINVAL;
+
+		if ((rest = (u[1] % 6250)) != 0)
+			u[1] += 6250 - rest;
+
+		sanitize_min_max(u[1], 600000, 1300000);
+		temp_opp->u_volt = u[1];
+	} else {
+		list_for_each_entry_rcu(temp_opp, &dev_opp->opp_list, node) {
+			if (temp_opp->available) {
+				if ((rest = (u[i] % 6250)) != 0)
+					u[i] += 6250 - rest;
+
+				sanitize_min_max(u[i], 600000, 1300000);
+				temp_opp->u_volt = u[i++];
+			}
+		}
+	}
+
+	return count;
+}
+
+static DEVICE_ATTR(volt_table, S_IRUGO | S_IWUSR, show_volt_table, store_volt_table);
+
 static struct exynos_devfreq_platdata default_qos_mif_pd = {
 	.default_qos = 160000,
 };
@@ -1037,7 +1099,7 @@ static int exynos5_bus_mif_tmu_notifier(struct notifier_block *notifier,
 		if (*on < MEM_TH_LV2) {
 			if (pm_qos_request_active(&min_mif_thermal_qos))
 				pm_qos_update_request(&min_mif_thermal_qos,
-							mif_bus_opp_list[LV_5].clk);
+							mif_bus_opp_list[LV_6].clk);
 		}
 
 		__raw_writel(AREF_HOT, EXYNOS5_DREXI_0_TIMINGAREF);
@@ -1049,12 +1111,12 @@ static int exynos5_bus_mif_tmu_notifier(struct notifier_block *notifier,
 		if (*on > MEM_TH_LV2) {
 			if (pm_qos_request_active(&min_mif_thermal_qos))
 				pm_qos_update_request(&min_mif_thermal_qos,
-							mif_bus_opp_list[LV_5].clk);
+							mif_bus_opp_list[LV_6].clk);
 		}
 		break;
 	case MEM_TH_LV3:
 		if (pm_qos_request_active(&min_mif_thermal_qos))
-			pm_qos_update_request(&min_mif_thermal_qos, mif_bus_opp_list[LV_4].clk);
+			pm_qos_update_request(&min_mif_thermal_qos, mif_bus_opp_list[LV_5].clk);
 
 		__raw_writel(AREF_CRITICAL, EXYNOS5_DREXI_0_TIMINGAREF);
 		__raw_writel(AREF_CRITICAL, EXYNOS5_DREXI_1_TIMINGAREF);
@@ -1235,6 +1297,11 @@ static __devinit int exynos5_busfreq_mif_probe(struct platform_device *pdev)
 
 	/* Add sysfs for freq_table */
 	err = device_create_file(&data->devfreq->dev, &dev_attr_freq_table);
+	if (err)
+		pr_err("%s: Fail to create sysfs file\n", __func__);
+
+	/* Add sysfs for volt_table */
+	err = device_create_file(&data->devfreq->dev, &dev_attr_volt_table);
 	if (err)
 		pr_err("%s: Fail to create sysfs file\n", __func__);
 
